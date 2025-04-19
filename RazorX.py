@@ -61,12 +61,6 @@ def calculate_ema(prices, period):
 
     return ema_values
 
-data = get_kiline_data(client, "BTCUSDT")
-close_prices = data.loc[:, 'close']
-ema_10 = calculate_ema(close_prices, 10)
-ema_20 = calculate_ema(close_prices, 20)
-print(ema_20)
-
 
 def calculate_rsi(symbol, period=14, column='close'):
 
@@ -101,30 +95,34 @@ def get_candles_fo_check_trade_conditions(symbol):
 
 
 
-
-# if fast_ema > slow_ema and latest_candle_open > fast_ema and latest_candle_high > fast_ema and latest_candle_low > fast_ema and latest_candle_close > fast_ema and latest_candle_open > slow_ema and latest_candle_high > slow_ema and latest_candle_low > slow_ema and latest_candle_close > slow_ema:
-
 def check_trend(symbol):
-    ema_10, ema_20 = calculate_ema(symbol)
-    fast_ema = ema_10
-    slow_ema = ema_20
+    data = get_kiline_data(client, "BTCUSDT")
+    close_prices = data.loc[:, 'close']
+    ema_10 = calculate_ema(close_prices, 10)
+    ema_20 = calculate_ema(close_prices, 20)
+    fast_ema = ema_10[1]
+    slow_ema = ema_20[1]
     latest_candle_open, latest_candle_high, latest_candle_low, latest_candle_close = get_candles_fo_check_trade_conditions(symbol)
 
-    # if fast_ema > slow_ema and latest_candle_close > fast_ema and latest_candle_close > slow_ema:
-    #     print("up")
-    # else:
-    #     print("down")
+    if fast_ema > slow_ema and all(value > fast_ema and value > slow_ema for value in [
+    latest_candle_open, latest_candle_high, latest_candle_low, latest_candle_close]):
+        return "uptrend"
+    elif fast_ema < slow_ema and all(value < fast_ema and value < slow_ema for value in [
+    latest_candle_open, latest_candle_high, latest_candle_low, latest_candle_close]):
+        return "downtrend"
 
-    print(fast_ema, slow_ema)
+   
+def check_trade_conditions(symbol):
+    trend = check_trend(symbol)
+    rsi = calculate_rsi(symbol)
+
+    if trend == "uptrend" and rsi >= 30:
+        print("buy")
+    elif trend == "downtrend" and rsi <= 70:
+        print("sell")
+    else:
+        print("no signal")
+
     
 
-# check_trend("ETHUSDT")
-
-# rsi = calculate_rsi(symbol)
-
-# and all(value > fast_ema and value > slow_ema for value in [
-#     latest_candle_open, latest_candle_high, latest_candle_low, latest_candle_close]):
-#         print("uptend")
-#     elif fast_ema < slow_ema and all(value < fast_ema and value < slow_ema for value in [
-#     latest_candle_open, latest_candle_high, latest_candle_low, latest_candle_close]):
-#         print("downtrend")
+check_trade_conditions("BTCUSDT")
