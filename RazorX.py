@@ -16,6 +16,14 @@ CHAT_ID = os.getenv('CHAT_ID')
 
 client = HTTP(demo=True, api_key=API_KEY,api_secret=SECRET_KEY)
 
+CONFIG = {
+    "tp" : 0.05,
+    "sl" : 0.01,
+    "mode" : 1,
+    "leverage" : "20",
+    "qty" : 20
+}
+
 
 TOKEN: Final = TELEGRAM
 CHAT_ID: Final = CHAT_ID
@@ -111,7 +119,119 @@ def check_trend(symbol):
     latest_candle_open, latest_candle_high, latest_candle_low, latest_candle_close]):
         return "downtrend"
 
-   
+
+def get_tickers():
+    high_volume_tickers = []
+
+    try:
+        tickers = client.get_tickers(category="linear")['result']['list']
+        for ticker in tickers:
+            symbol = ticker['symbol']
+            turnover_24h = float(ticker['turnover24h'])  # This is in USD
+            if turnover_24h >= 80000000.0000 and not "BTC" in symbol:
+                high_volume_tickers.append(symbol)
+        print(high_volume_tickers)
+        print(len(high_volume_tickers))
+        # return high_volume_tickers
+    except Exception as err:
+        print(err)
+
+
+def set_leverage(symbol):
+    try:
+        response = client.set_leverage(
+            category="linear",
+            symbol=symbol,
+            buyLeverage=CONFIG.leverage,
+            sellLeverage=CONFIG.leverage
+        )
+        return response
+    except Exception as err:
+        print(err)
+
+
+def set_mode(symbol):
+    try:
+        resp = client.switch_margin_mode(
+            category='linear',
+            symbol=symbol,
+            tradeMode = CONFIG.mode,
+            buyLeverage=CONFIG.leverage,
+            sellLeverage=CONFIG.leverage
+        )
+        # print(resp)
+    except Exception as err:
+        print(err)
+
+
+def get_price_precision(symbol):
+    response = client.get_instruments_info(category="linear", symbol=symbol)["result"]["list"][0]
+    price = response["priceFilter"]["tickSize"]
+    
+    if "." in price:
+        price = len(price.split(".")[1])
+    else:
+        price = 0
+
+    quantity = response["lotSizeFilter"]["qtyStep"]
+
+    if "." in quantity:
+        quantity = len(quantity.split(".")[1])
+    else:
+        quantity = 0
+    
+    return price, quantity
+
+def place_buy_order(symbol):
+    try:
+        open, high, low, close = get_candles_fo_check_trade_conditions(symbol)
+
+        price_precision = get_price_precision(symbol)[0]
+        qty_precision = get_price_precision(symbol)[1]
+        tpPrice = round(close + close * CONFIG.tp, price_precision)
+        order_qty = round(CONFIG.qty/close, qty_precision)
+        entry_price =  round(close, price_precision)
+
+        response = client.place_order(
+                category="linear",
+                symbol=symbol,
+                side="Buy",
+                orderType="Limit",
+                qty=order_qty,
+                price = entry_price,
+                takeProfit = tpPrice,
+                time_in_force="GTC"
+            )
+        print(f"BUY order placed for: {symbol}")
+    except Exception as err:
+        print(err)
+
+
+def place_sell_order(symbol, number_of_candle):
+    try:
+        open, high, low, close = get_candles_fo_check_trade_conditions(symbol)
+        
+        price_precision = get_price_precision(symbol)[0]
+        qty_precision = get_price_precision(symbol)[1]
+        tpPrice = round(close - close * CONFIG.tp, price_precision)
+        order_qty = round(CONFIG.qty/close, qty_precision)
+        entry_price =  round(close, price_precision)
+
+        response = client.place_order(
+                category="linear",
+                symbol=symbol,
+                side="Sell",
+                orderType="Limit",
+                qty=order_qty,
+                price = entry_price,
+                takeProfit = tpPrice,
+            )
+        print(f"SELL order placed for: {symbol}")
+    except Exception as err:
+        print(err)
+
+
+
 def check_trade_conditions(symbol):
     trend = check_trend(symbol)
     rsi = calculate_rsi(symbol)
@@ -122,7 +242,3 @@ def check_trade_conditions(symbol):
         print("sell")
     else:
         print("no signal")
-
-    
-
-check_trade_conditions("BTCUSDT")
