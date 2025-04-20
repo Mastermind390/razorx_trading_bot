@@ -16,13 +16,11 @@ CHAT_ID = os.getenv('CHAT_ID')
 
 client = HTTP(demo=True, api_key=API_KEY,api_secret=SECRET_KEY)
 
-CONFIG = {
-    "tp" : 0.05,
-    "sl" : 0.01,
-    "mode" : 1,
-    "leverage" : "20",
-    "qty" : 20
-}
+tp = 0.05
+sl = 0.01
+mode = 1
+leverage = "20"
+qty = 20
 
 
 TOKEN: Final = TELEGRAM
@@ -130,9 +128,9 @@ def get_tickers():
             turnover_24h = float(ticker['turnover24h'])  # This is in USD
             if turnover_24h >= 80000000.0000 and not "BTC" in symbol:
                 high_volume_tickers.append(symbol)
-        print(high_volume_tickers)
-        print(len(high_volume_tickers))
-        # return high_volume_tickers
+        # print(high_volume_tickers)
+        # print(len(high_volume_tickers))
+        return high_volume_tickers
     except Exception as err:
         print(err)
 
@@ -142,8 +140,8 @@ def set_leverage(symbol):
         response = client.set_leverage(
             category="linear",
             symbol=symbol,
-            buyLeverage=CONFIG.leverage,
-            sellLeverage=CONFIG.leverage
+            buyLeverage=leverage,
+            sellLeverage=leverage
         )
         return response
     except Exception as err:
@@ -155,9 +153,9 @@ def set_mode(symbol):
         resp = client.switch_margin_mode(
             category='linear',
             symbol=symbol,
-            tradeMode = CONFIG.mode,
-            buyLeverage=CONFIG.leverage,
-            sellLeverage=CONFIG.leverage
+            tradeMode = mode,
+            buyLeverage=leverage,
+            sellLeverage=leverage
         )
         # print(resp)
     except Exception as err:
@@ -182,15 +180,26 @@ def get_price_precision(symbol):
     
     return price, quantity
 
+def take_profit_and_stop_loss(symbol):
+    pen, high, low, close = get_candles_fo_check_trade_conditions(symbol)
+
+    price_precision = get_price_precision(symbol)[0]
+    qty_precision = get_price_precision(symbol)[1]
+    buy_tpPrice = round(close + close * tp, price_precision)
+    buy_slPrice = round(close - close * sl, price_precision)
+    sell_tpPrice = round(close - close * tp, price_precision)
+    sell_slPrice = round(close + close * sl, price_precision)
+    order_qty = round(qty/close, qty_precision)
+    entry_price =  round(close, price_precision)
+
+    return buy_tpPrice, buy_slPrice, sell_tpPrice, sell_slPrice, order_qty, entry_price
+
+
 def place_buy_order(symbol):
     try:
         open, high, low, close = get_candles_fo_check_trade_conditions(symbol)
 
-        price_precision = get_price_precision(symbol)[0]
-        qty_precision = get_price_precision(symbol)[1]
-        tpPrice = round(close + close * CONFIG.tp, price_precision)
-        order_qty = round(CONFIG.qty/close, qty_precision)
-        entry_price =  round(close, price_precision)
+        buy_tpPrice, buy_slPrice, sell_tpPrice, sell_slPrice, order_qty, entry_price = take_profit_and_stop_loss(symbol)
 
         response = client.place_order(
                 category="linear",
@@ -199,7 +208,8 @@ def place_buy_order(symbol):
                 orderType="Limit",
                 qty=order_qty,
                 price = entry_price,
-                takeProfit = tpPrice,
+                takeProfit = buy_tpPrice,
+                stopLoss = buy_slPrice,
                 time_in_force="GTC"
             )
         print(f"BUY order placed for: {symbol}")
@@ -207,15 +217,11 @@ def place_buy_order(symbol):
         print(err)
 
 
-def place_sell_order(symbol, number_of_candle):
+def place_sell_order(symbol):
     try:
         open, high, low, close = get_candles_fo_check_trade_conditions(symbol)
         
-        price_precision = get_price_precision(symbol)[0]
-        qty_precision = get_price_precision(symbol)[1]
-        tpPrice = round(close - close * CONFIG.tp, price_precision)
-        order_qty = round(CONFIG.qty/close, qty_precision)
-        entry_price =  round(close, price_precision)
+        buy_tpPrice, buy_slPrice, sell_tpPrice, sell_slPrice, order_qty, entry_price = take_profit_and_stop_loss(symbol)
 
         response = client.place_order(
                 category="linear",
@@ -224,21 +230,94 @@ def place_sell_order(symbol, number_of_candle):
                 orderType="Limit",
                 qty=order_qty,
                 price = entry_price,
-                takeProfit = tpPrice,
+                takeProfit = sell_tpPrice,
+                stopLoss = sell_slPrice,
+                time_in_force="GTC"
             )
         print(f"SELL order placed for: {symbol}")
     except Exception as err:
         print(err)
 
+async def send_signal(message):
+    await bot.send_message(chat_id=CHAT_ID, text=message)
 
 
-def check_trade_conditions(symbol):
+sendSignal = False
+
+async def check_trade_conditions(symbol):
+
+    global sendSignal
+
     trend = check_trend(symbol)
     rsi = calculate_rsi(symbol)
 
+    open, high, low, close = get_candles_fo_check_trade_conditions(symbol)
+
+    buy_tpPrice, buy_slPrice, sell_tpPrice, sell_slPrice, order_qty, entry_price = take_profit_and_stop_loss(symbol)
+
     if trend == "uptrend" and rsi >= 30:
-        print("buy")
+        place_buy_order(symbol)
+        BUY_SIGNAL = (
+            f"🚨 Trade Alert for {symbol} 🚨\n\n"
+            f"Signal: BUY 🟢\n"
+            f"Entry Price: {entry_price}\n"
+            f"Take Profit: {buy_tpPrice}\n"
+            f"stop loss: {buy_slPrice}\n"
+            f"🔔 Stay sharp and manage your risk!"
+        )
+        await send_signal(BUY_SIGNAL.upper())
+        print(BUY_SIGNAL)
+        sendSignal = True
     elif trend == "downtrend" and rsi <= 70:
-        print("sell")
+        place_sell_order(symbol)
+        SELL_SIGNAL = (
+            f"🚨 Trade Alert for **{symbol}** 🚨\n\n"
+            f"Signal: SELL 🟢\n"
+            f"Entry Price: {entry_price}\n"
+            f"Take Profit: {sell_tpPrice}\n"
+            f"stop loss: {sell_slPrice}\n"
+            f"🔔 Stay sharp and manage your risk!"
+        )
+        await send_signal(SELL_SIGNAL.upper())
+        print(SELL_SIGNAL)
+        sendSignal = True
     else:
         print("no signal")
+
+
+    if sendSignal and close > entry_price and close >= buy_tpPrice:
+        BUY_TP_SIGNAL = (
+            f"🎯 TP Hit Alert for {symbol} 🎯\n\n"
+            f"Congratulations!!! 🎆🎇\n"
+            f"TP Hit at: {buy_tpPrice}\n"
+            f"More more wins guys 🎈📊"
+        )
+        sendSignal = False
+        print(BUY_TP_SIGNAL)
+    elif sendSignal and close < entry_price and close  <= buy_slPrice:
+        BUY_SL_SIGNAL = (
+            f"😢 SL Hit Alert for {symbol} 😢\n\n"
+            f"losses is part of the game. keep moving guys\n"
+            f"SL Hit at: {buy_slPrice}\n"
+            f"💔💔💔💔"
+        )
+        sendSignal = False
+        print(BUY_SL_SIGNAL)
+
+
+
+
+async def main():
+    symbols = get_tickers()
+    while True:
+        for symbol in symbols:
+            set_leverage(symbol)
+            set_mode(symbol)
+            try:
+                await check_trade_conditions(symbol)
+            except Exception as err:
+                print(f"Error checking signal for {symbol}: {err}")
+        await asyncio.sleep(900)
+
+if __name__ == "__main__":
+    asyncio.run(main())
