@@ -84,12 +84,12 @@ def calculate_rsi(symbol, period=14, column='close'):
     rs = avg_gain / avg_loss
     semi_rsi = 100 - (100 / (1 + rs)).dropna()
     final_rsi = semi_rsi.to_numpy()
-    rsi = final_rsi[1] + 3.6
+    rsi = final_rsi[1] + 3.6 if len(final_rsi) > 1 else 50
 
     return rsi
 
 
-def get_candles_fo_check_trade_conditions(symbol):
+def get_candles_for_check_trade_conditions(symbol):
     candles = get_kiline_data(client, symbol, interval = 15)
 
     latest_candle_open = candles.iloc[1, 0]
@@ -108,7 +108,7 @@ def check_trend(symbol):
     ema_20 = calculate_ema(close_prices, 20)
     fast_ema = ema_10[1]
     slow_ema = ema_20[1]
-    latest_candle_open, latest_candle_high, latest_candle_low, latest_candle_close = get_candles_fo_check_trade_conditions(symbol)
+    latest_candle_open, latest_candle_high, latest_candle_low, latest_candle_close = get_candles_for_check_trade_conditions(symbol)
 
     if fast_ema > slow_ema and all(value > fast_ema and value > slow_ema for value in [
     latest_candle_open, latest_candle_high, latest_candle_low, latest_candle_close]):
@@ -180,8 +180,9 @@ def get_price_precision(symbol):
     
     return price, quantity
 
+
 def take_profit_and_stop_loss(symbol):
-    pen, high, low, close = get_candles_fo_check_trade_conditions(symbol)
+    pen, high, low, close = get_candles_for_check_trade_conditions(symbol)
 
     price_precision = get_price_precision(symbol)[0]
     qty_precision = get_price_precision(symbol)[1]
@@ -197,7 +198,7 @@ def take_profit_and_stop_loss(symbol):
 
 def place_buy_order(symbol):
     try:
-        open, high, low, close = get_candles_fo_check_trade_conditions(symbol)
+        open, high, low, close = get_candles_for_check_trade_conditions(symbol)
 
         buy_tpPrice, buy_slPrice, sell_tpPrice, sell_slPrice, order_qty, entry_price = take_profit_and_stop_loss(symbol)
 
@@ -218,7 +219,7 @@ def place_buy_order(symbol):
 
 def place_sell_order(symbol):
     try:
-        open, high, low, close = get_candles_fo_check_trade_conditions(symbol)
+        open, high, low, close = get_candles_for_check_trade_conditions(symbol)
         
         buy_tpPrice, buy_slPrice, sell_tpPrice, sell_slPrice, order_qty, entry_price = take_profit_and_stop_loss(symbol)
 
@@ -236,28 +237,77 @@ def place_sell_order(symbol):
     except Exception as err:
         print(err)
 
+
 async def send_signal(message):
     await bot.send_message(chat_id=CHAT_ID, text=message)
 
-
-sendSignal = False
 
 sent_signals = []
 
 symbol_signal = {}
 
 async def check_trade_conditions(symbol):
-    global sendSignal
 
     trend = check_trend(symbol)
     rsi = calculate_rsi(symbol)
 
-    open, high, low, close = get_candles_fo_check_trade_conditions(symbol)
-
     buy_tpPrice, buy_slPrice, sell_tpPrice, sell_slPrice, order_qty, entry_price = take_profit_and_stop_loss(symbol)
+
+    open, high, low, close = get_candles_for_check_trade_conditions(symbol)
 
     # Find existing signal if any
     existing_signal = next((s for s in sent_signals if s["symbol"] == symbol), None)
+
+
+    if existing_signal and existing_signal["signal_sent"]:
+        # TRADE MANAGEMENT — TP/SL Check
+        entry_price = existing_signal["entry_price"]
+        tp = existing_signal["buy_tpPrice"]
+        sl = existing_signal["buy_slPrice"]
+
+        if existing_signal["order_type"] == "buy":
+            if close > entry_price and close >= tp:
+                BUY_TP_SIGNAL = (
+                    f"🎯 TP Hit Alert for {symbol} 🎯\n\n"
+                    f"Congratulations!!! 🎆🎇\n"
+                    f"TP Hit at: {tp}\n"
+                    f"More more wins guys 🎈📊"
+                )
+                existing_signal["signal_sent"] = False
+                print(BUY_TP_SIGNAL)
+
+            elif close < entry_price and close <= sl:
+                BUY_SL_SIGNAL = (
+                    f"😢 SL Hit Alert for {symbol} 😢\n\n"
+                    f"Losses are part of the game. Keep moving guys.\n"
+                    f"SL Hit at: {sl}\n"
+                    f"💔💔💔💔"
+                )
+                existing_signal["signal_sent"] = False
+                print(BUY_SL_SIGNAL)
+
+        elif existing_signal["order_type"] == "sell":
+            if close < entry_price and close <= tp:
+                SELL_TP_SIGNAL = (
+                    f"🎯 TP Hit Alert for {symbol} 🎯\n\n"
+                    f"SELL TP Hit at: {tp}\n"
+                    f"Well done traders! 🥳📉"
+                )
+                existing_signal["signal_sent"] = False
+                print(SELL_TP_SIGNAL)
+
+            elif close > entry_price and close >= sl:
+                SELL_SL_SIGNAL = (
+                    f"😢 SL Hit Alert for {symbol} 😢\n\n"
+                    f"SELL SL Hit at: {sl}\n"
+                    f"Don't give up. You'll bounce back!"
+                )
+                existing_signal["signal_sent"] = False
+                print(SELL_SL_SIGNAL)
+
+        return  # Stop here if managing an active trade
+
+
 
     # Only proceed if no signal exists, or signal exists but not yet sent
     if not existing_signal or not existing_signal["signal_sent"]:
@@ -272,6 +322,7 @@ async def check_trade_conditions(symbol):
                 f"Stop Loss: {buy_slPrice}\n"
                 f"🔔 Stay sharp and manage your risk!"
             )
+            await send_signal(BUY_SIGNAL.upper())
             new_signal = {
                 "signal_sent": True,
                 "symbol": symbol,
@@ -284,7 +335,7 @@ async def check_trade_conditions(symbol):
                 sent_signals.remove(existing_signal)
             sent_signals.append(new_signal)
             print(BUY_SIGNAL)
-
+            
         elif trend == "downtrend" and rsi <= 70:
             place_sell_order(symbol)
             SELL_SIGNAL = (
@@ -295,6 +346,7 @@ async def check_trade_conditions(symbol):
                 f"Stop Loss: {sell_slPrice}\n"
                 f"🔔 Stay sharp and manage your risk!"
             )
+            await send_signal(SELL_SIGNAL.upper())
             new_signal = {
                 "signal_sent": True,
                 "symbol": symbol,
@@ -313,32 +365,10 @@ async def check_trade_conditions(symbol):
     else:
         print("signal already sent and marked as sent")
 
+    if len(sent_signals) >= 50:
+        sent_signals.pop(0)
     print(sent_signals)
 
-
-    
-    # if sendSignal and close > entry_price and close >= buy_tpPrice:
-    #     BUY_TP_SIGNAL = (
-    #         f"🎯 TP Hit Alert for {symbol} 🎯\n\n"
-    #         f"Congratulations!!! 🎆🎇\n"
-    #         f"TP Hit at: {buy_tpPrice}\n"
-    #         f"More more wins guys 🎈📊"
-    #     )
-    #     sendSignal = False
-    #     print(BUY_TP_SIGNAL)
-    # elif sendSignal and close < entry_price and close  <= buy_slPrice:
-            # BUY_SL_SIGNAL = (
-            #     f"😢 SL Hit Alert for {symbol} 😢\n\n"
-            #     f"losses is part of the game. keep moving guys\n"
-            #     f"SL Hit at: {buy_slPrice}\n"
-            #     f"💔💔💔💔"
-            # )
-            # sendSignal = False
-            # print(BUY_SL_SIGNAL)
-
-
-
-# print(symbols)
 
 
 async def main():
