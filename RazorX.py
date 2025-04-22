@@ -1,4 +1,5 @@
 from typing import Final
+from talipp.indicators import EMA, RSI
 from telegram import Bot
 import asyncio
 from pybit.unified_trading import HTTP
@@ -6,6 +7,7 @@ from dotenv import load_dotenv
 import pandas as pd
 import numpy as np
 import os
+
 
 load_dotenv()
 
@@ -52,41 +54,41 @@ def get_kiline_data(client, symbol, interval = 15):
         return process_data(response)
 
 
-def calculate_ema(prices, period):
-    ema_values = []
-    multiplier = 2 / (period + 1)
+# def calculate_ema(prices, period):
+#     ema_values = []
+#     multiplier = 2 / (period + 1)
 
-    # Start with SMA
-    sma = sum(prices[:period]) / period
-    ema_values.append(sma)
+#     # Start with SMA
+#     sma = sum(prices[:period]) / period
+#     ema_values.append(sma)
 
-    for price in prices[period:]:
-        ema_prev = ema_values[0]
-        ema_current = (price - ema_prev) * multiplier + ema_prev
-        ema_values.append(ema_current)
+#     for price in prices[period:]:
+#         ema_prev = ema_values[0]
+#         ema_current = (price - ema_prev) * multiplier + ema_prev
+#         ema_values.append(ema_current)
 
-    return ema_values
+#     return ema_values
 
+# def calculate_rsi(symbol, period=14, column='close'):
 
-def calculate_rsi(symbol, period=14, column='close'):
+#     data = get_kiline_data(client, symbol, interval = 15)
 
-    data = get_kiline_data(client, symbol, interval = 15)
+#     delta = data.loc[:, column].diff()
 
-    delta = data.loc[:, column].diff()
+#     gain = delta.clip(lower=0)
+#     loss = -delta.clip(upper=0)
 
-    gain = delta.clip(lower=0)
-    loss = -delta.clip(upper=0)
+#     # Use exponential moving average (EMA)
+#     avg_gain = gain.rolling(window=period).mean()
+#     avg_loss = loss.rolling(window=period).mean()
 
-    # Use exponential moving average (EMA)
-    avg_gain = gain.rolling(window=period).mean()
-    avg_loss = loss.rolling(window=period).mean()
+#     rs = avg_gain / avg_loss
+#     semi_rsi = 100 - (100 / (1 + rs)).dropna()
+#     final_rsi = semi_rsi.to_numpy()
+#     rsi = final_rsi[1] + 3.6 if len(final_rsi) > 1 else 50
 
-    rs = avg_gain / avg_loss
-    semi_rsi = 100 - (100 / (1 + rs)).dropna()
-    final_rsi = semi_rsi.to_numpy()
-    rsi = final_rsi[1] + 3.6 if len(final_rsi) > 1 else 50
+#     return rsi
 
-    return rsi
 
 
 def get_candles_for_check_trade_conditions(symbol):
@@ -104,16 +106,28 @@ def get_candles_for_check_trade_conditions(symbol):
 def check_trend(symbol):
     data = get_kiline_data(client, symbol)
     close_prices = data.loc[:, 'close']
-    ema_10 = calculate_ema(close_prices, 10)
-    ema_20 = calculate_ema(close_prices, 20)
-    fast_ema = ema_10[1]
-    slow_ema = ema_20[1]
+    EMA_10 = EMA(period = 10, input_values = close_prices)
+    EMA_30 = EMA(period = 30, input_values = close_prices)
+    EMA_10_filtered = [x for x in EMA_10 if x is not None]
+    EMA_30_filtered = [x for x in EMA_30 if x is not None]
+
+    if len(EMA_10_filtered) < 3 or len(EMA_30_filtered) < 3:
+        return None
+   
+    fast_ema_prev2 = EMA_10_filtered[2]
+    fast_ema_prev1 = EMA_10_filtered[1]
+    slow_ema_prev2 = EMA_30_filtered[2]
+    slow_ema_prev1 = EMA_30_filtered[1]
+
+    # fast_ema = EMA_10_filtered[1]
+    # slow_ema = EMA_30_filtered[1]
+
     latest_candle_open, latest_candle_high, latest_candle_low, latest_candle_close = get_candles_for_check_trade_conditions(symbol)
 
-    if fast_ema > slow_ema and all(value > fast_ema and value > slow_ema for value in [
+    if fast_ema_prev2 < slow_ema_prev2 and fast_ema_prev1 > slow_ema_prev1 and all(value > fast_ema_prev1 and value > slow_ema_prev1 for value in [
     latest_candle_open, latest_candle_high, latest_candle_low, latest_candle_close]):
         return "uptrend"
-    elif fast_ema < slow_ema and all(value < fast_ema and value < slow_ema for value in [
+    elif fast_ema_prev2 > slow_ema_prev2 and fast_ema_prev1 < slow_ema_prev1 and all(value < fast_ema_prev1 and value < slow_ema_prev1 for value in [
     latest_candle_open, latest_candle_high, latest_candle_low, latest_candle_close]):
         return "downtrend"
 
@@ -126,10 +140,8 @@ def get_tickers():
         for ticker in tickers:
             symbol = ticker['symbol']
             turnover_24h = float(ticker['turnover24h'])  # This is in USD
-            if turnover_24h >= 80000000.0000 and not "BTC" in symbol:
+            if turnover_24h >= 100000000.0000 and not "BTC" in symbol:
                 high_volume_tickers.append(symbol)
-        # print(high_volume_tickers)
-        # print(len(high_volume_tickers))
         return high_volume_tickers
     except Exception as err:
         print(err)
@@ -248,9 +260,15 @@ symbol_signal = {}
 
 async def check_trade_conditions(symbol):
 
-    trend = check_trend(symbol)
-    rsi = calculate_rsi(symbol)
+    data = get_kiline_data(client, symbol)
+    close_prices = data.loc[:, 'close']
 
+    trend = check_trend(symbol)
+    RSI_14 = RSI(period = 14, input_values = close_prices)
+    RSI_14_filtered = [x for x in RSI_14 if x is not None]
+
+    rsi = RSI_14_filtered[0]
+    
     buy_tpPrice, buy_slPrice, sell_tpPrice, sell_slPrice, order_qty, entry_price = take_profit_and_stop_loss(symbol)
 
     open, high, low, close = get_candles_for_check_trade_conditions(symbol)
